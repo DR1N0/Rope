@@ -969,13 +969,13 @@ class GUI(tk.Tk):
                     img = cv2.imread(file)
 
                     if img is not None:
-                        img = torch.from_numpy(img.astype('uint8')).to('cuda')
+                        img = torch.from_numpy(img.astype('uint8')).to(self.models.detection_device_str)
 
                         pad_scale = 0.2
                         padded_width = int(img.size()[1]*(1.+pad_scale))
                         padded_height = int(img.size()[0]*(1.+pad_scale))
 
-                        padding = torch.zeros((padded_height, padded_width, 3), dtype=torch.uint8, device='cuda:0')
+                        padding = torch.zeros((padded_height, padded_width, 3), dtype=torch.uint8, device=self.models.detection_device_str)
 
                         width_start = int(img.size()[1]*pad_scale/2)
                         width_end = width_start+int(img.size()[1])
@@ -991,6 +991,9 @@ class GUI(tk.Tk):
                         except IndexError:
                             print('Image cropped too close:', file)
                         else:
+                            # Move img to main device for recognition (GPU for AMD hybrid mode)
+                            if self.models.detection_device_str != self.models.device_str:
+                                img = img.to(self.models.device_str)
                             face_emb, cropped_image = self.models.run_recognize(img, kpss)
                             crop = cv2.cvtColor(cropped_image.cpu().numpy(), cv2.COLOR_BGR2RGB)
                             crop = cv2.resize(crop, (85, 85))
@@ -1020,10 +1023,13 @@ class GUI(tk.Tk):
 
     def find_faces(self):
         try:
-            img = torch.from_numpy(self.video_image).to('cuda')
+            img = torch.from_numpy(self.video_image).to(self.models.detection_device_str)
             img = img.permute(2,0,1)
             kpss = self.models.run_detect(img, max_num=50)
 
+            # Move img to main device for recognition (GPU for AMD hybrid mode)
+            if self.models.detection_device_str != self.models.device_str:
+                img = img.to(self.models.device_str)
 
             ret = []
             for face_kps in kpss:
