@@ -103,7 +103,21 @@ class GUI(tk.Tk):
                             "Image":                    [],
                             "Embedding":                []
                             }   
-        self.source_faces = [] 
+        self.source_faces = []
+        
+        # Folder group structure for hierarchical view
+        self.face_group = {
+                            "FolderPath":               "",
+                            "FolderName":               "",
+                            "TKButton":                 [],
+                            "TKThumbnail":              [],
+                            "ButtonState":              False,
+                            "Expanded":                 True,
+                            "FaceIndices":              [],
+                            "FaceCount":                0
+                            }
+        self.face_groups = []
+        self.use_hierarchical_view = True  # Default to new hierarchical view
    
                                                     
 
@@ -916,6 +930,7 @@ class GUI(tk.Tk):
 
     def load_input_faces(self):
         self.source_faces = []
+        self.face_groups = []
         self.merged_faces_canvas.delete("all")
         self.source_faces_canvas.delete("all")
 
@@ -950,80 +965,216 @@ class GUI(tk.Tk):
 
         self.shift_i_len = len(self.source_faces)
 
-        # Next Load images
+        # Load images with hierarchical folder structure
         directory = self.json_dict["source faces"]
-        filenames = [os.path.join(dirpath,f) for (dirpath, dirnames, filenames) in os.walk(directory) for f in filenames]
+        
+        if self.use_hierarchical_view:
+            self._load_faces_hierarchical(directory)
+        else:
+            self._load_faces_flat(directory)
 
-        # torch.cuda.memory._record_memory_history(True, trace_alloc_max_entries=100000, trace_alloc_record_context=True)
-        i=0
-        for file in filenames: # Does not include full path
-            # Find all faces and ad to faces[]
-            # Guess File type based on extension
+        torch.cuda.empty_cache()
+    
+    def _load_faces_hierarchical(self, directory):
+        """Load faces with folder grouping and expand/collapse functionality"""
+        # Build folder structure
+        folder_structure = {}
+        
+        for root, dirs, files in os.walk(directory):
+            # Only process immediate subdirectories (one level deep)
+            if root == directory:
+                # Root level files
+                folder_structure['Root'] = []
+                for file in sorted(files):
+                    full_path = os.path.join(root, file)
+                    try:
+                        if mimetypes.guess_type(full_path)[0] and mimetypes.guess_type(full_path)[0][:5] == 'image':
+                            folder_structure['Root'].append(full_path)
+                    except:
+                        pass
+            else:
+                # Check if this is a direct child of root
+                rel_path = os.path.relpath(root, directory)
+                if os.sep not in rel_path:  # Only one level deep
+                    folder_structure[rel_path] = []
+                    for file in sorted(files):
+                        full_path = os.path.join(root, file)
+                        try:
+                            if mimetypes.guess_type(full_path)[0] and mimetypes.guess_type(full_path)[0][:5] == 'image':
+                                folder_structure[rel_path].append(full_path)
+                        except:
+                            pass
+        
+        # Process each folder and create groups
+        canvas_y = 0
+        
+        for folder_name in sorted(folder_structure.keys()):
+            face_files = folder_structure[folder_name]
+            if not face_files:
+                continue
+            
+            # Create folder group
+            new_group = self.face_group.copy()
+            new_group["FolderPath"] = folder_name if folder_name != 'Root' else ''
+            new_group["FolderName"] = folder_name
+            new_group["FaceIndices"] = []
+            new_group["FaceCount"] = 0
+            new_group["Expanded"] = True
+            
+            # Process first face for thumbnail
+            first_face_thumbnail = None
+            for file_path in face_files:
+                thumbnail = self._process_single_face(file_path, new_group)
+                if thumbnail and first_face_thumbnail is None:
+                    first_face_thumbnail = thumbnail
+                    new_group["TKThumbnail"] = first_face_thumbnail
+            
+            new_group["FaceCount"] = len(new_group["FaceIndices"])
+            
+            if new_group["FaceCount"] > 0:
+                # Create group button
+                group_idx = len(self.face_groups)
+                btn_text = f"{'▼' if new_group['Expanded'] else '▶'} {folder_name} ({new_group['FaceCount']})"
+                
+                new_group["TKButton"] = tk.Button(
+                    self.source_faces_canvas,
+                    style.media_button_off_3,
+                    text=btn_text,
+                    image=first_face_thumbnail if first_face_thumbnail else self.blank,
+                    compound='left',
+                    height=28,
+                    width=190,
+                    anchor='w'
+                )
+                new_group["TKButton"].bind("<ButtonRelease-1>", lambda e, idx=group_idx: self.toggle_folder_group(e, idx))
+                new_group["TKButton"].bind("<MouseWheel>", self.source_faces_mouse_wheel)
+                
+                self.source_faces_canvas.create_window(0, canvas_y, window=new_group["TKButton"], anchor='nw')
+                canvas_y += 30
+                
+                # Position individual faces under the group (if expanded)
+                if new_group["Expanded"]:
+                    canvas_y = self._position_group_faces(new_group, canvas_y)
+                
+                self.face_groups.append(new_group)
+        
+        self.source_faces_canvas.configure(scrollregion=self.source_faces_canvas.bbox("all"))
+        self.static_widget['input_faces_scrollbar'].resize_scrollbar(None)
+    
+    def _load_faces_flat(self, directory):
+        """Load faces in flat view (original behavior)"""
+        filenames = sorted([os.path.join(dirpath,f) for (dirpath, dirnames, filenames) in os.walk(directory) for f in filenames])
+        
+        i = 0
+        for file in filenames:
             try:
                 file_type = mimetypes.guess_type(file)[0][:5]
             except:
                 print('Unrecognized file type:', file)
             else:
-                # Its an image
                 if file_type == 'image':
-                    img = cv2.imread(file)
-
-                    if img is not None:
-                        img = torch.from_numpy(img.astype('uint8')).to('cuda')
-
-                        pad_scale = 0.2
-                        padded_width = int(img.size()[1]*(1.+pad_scale))
-                        padded_height = int(img.size()[0]*(1.+pad_scale))
-
-                        padding = torch.zeros((padded_height, padded_width, 3), dtype=torch.uint8, device='cuda:0')
-
-                        width_start = int(img.size()[1]*pad_scale/2)
-                        width_end = width_start+int(img.size()[1])
-                        height_start = int(img.size()[0]*pad_scale/2)
-                        height_end = height_start+int(img.size()[0])
-
-                        padding[height_start:height_end, width_start:width_end,  :] = img
-                        img = padding
-
-                        img = img.permute(2,0,1)
-                        try:
-                            kpss = self.models.run_detect(img, max_num=1)[0] # Just one face here
-                        except IndexError:
-                            print('Image cropped too close:', file)
-                        else:
-                            face_emb, cropped_image = self.models.run_recognize(img, kpss)
-                            crop = cv2.cvtColor(cropped_image.cpu().numpy(), cv2.COLOR_BGR2RGB)
-                            crop = cv2.resize(crop, (85, 85))
-
-                            new_source_face = self.source_face.copy()
-                            self.source_faces.append(new_source_face)
-
-                            self.source_faces[-1]["Image"] = ImageTk.PhotoImage(image=Image.fromarray(crop))
-                            self.source_faces[-1]["Embedding"] = face_emb
-                            self.source_faces[-1]["TKButton"] = tk.Button(self.source_faces_canvas, style.media_button_off_3, image=self.source_faces[-1]["Image"], height=90, width=90)
-                            self.source_faces[-1]["ButtonState"] = False
-                            self.source_faces[-1]["file"] = file
-
-                            self.source_faces[-1]["TKButton"].bind("<ButtonRelease-1>", lambda event, arg=len(self.source_faces)-1: self.select_input_faces(event, arg))
-                            self.source_faces[-1]["TKButton"].bind("<MouseWheel>", self.source_faces_mouse_wheel)
-
-                            self.source_faces_canvas.create_window((i % 2) * 100, (i // 2) * 100, window=self.source_faces[-1]["TKButton"], anchor='nw')
-
-                            self.static_widget['input_faces_scrollbar'].resize_scrollbar(None)
-                            i = i + 1
-
-                    else:
-                        print('Bad file', file)
-
-
-        torch.cuda.empty_cache()
+                    if self._process_single_face(file, None):
+                        self.source_faces_canvas.create_window((i % 2) * 100, (i // 2) * 100, window=self.source_faces[-1]["TKButton"], anchor='nw')
+                        i += 1
+        
+        self.static_widget['input_faces_scrollbar'].resize_scrollbar(None)
+    
+    def _process_single_face(self, file_path, group=None):
+        """Process a single face image and add to source_faces. Returns thumbnail image."""
+        img = cv2.imread(file_path)
+        if img is None:
+            print('Bad file', file_path)
+            return None
+        
+        img = torch.from_numpy(img.astype('uint8')).to(self.models.detection_device_str)
+        
+        pad_scale = 0.2
+        padded_width = int(img.size()[1]*(1.+pad_scale))
+        padded_height = int(img.size()[0]*(1.+pad_scale))
+        
+        padding = torch.zeros((padded_height, padded_width, 3), dtype=torch.uint8, device=self.models.detection_device_str)
+        
+        width_start = int(img.size()[1]*pad_scale/2)
+        width_end = width_start+int(img.size()[1])
+        height_start = int(img.size()[0]*pad_scale/2)
+        height_end = height_start+int(img.size()[0])
+        
+        padding[height_start:height_end, width_start:width_end, :] = img
+        img = padding
+        img = img.permute(2,0,1)
+        
+        try:
+            kpss = self.models.run_detect(img, max_num=1)[0]
+        except IndexError:
+            print('Image cropped too close:', file_path)
+            return None
+        
+        # Move img to main device for recognition
+        if self.models.detection_device_str != self.models.device_str:
+            img = img.to(self.models.device_str)
+        
+        face_emb, cropped_image = self.models.run_recognize(img, kpss)
+        crop = cv2.cvtColor(cropped_image.cpu().numpy(), cv2.COLOR_BGR2RGB)
+        crop = cv2.resize(crop, (85, 85))
+        
+        new_source_face = self.source_face.copy()
+        self.source_faces.append(new_source_face)
+        face_idx = len(self.source_faces) - 1
+        
+        thumbnail_image = ImageTk.PhotoImage(image=Image.fromarray(crop))
+        
+        self.source_faces[face_idx]["Image"] = thumbnail_image
+        self.source_faces[face_idx]["Embedding"] = face_emb
+        self.source_faces[face_idx]["TKButton"] = tk.Button(
+            self.source_faces_canvas,
+            style.media_button_off_3,
+            image=thumbnail_image,
+            height=90,
+            width=90
+        )
+        self.source_faces[face_idx]["ButtonState"] = False
+        self.source_faces[face_idx]["file"] = file_path
+        
+        self.source_faces[face_idx]["TKButton"].bind("<ButtonRelease-1>", lambda event, arg=face_idx: self.select_input_faces(event, arg))
+        self.source_faces[face_idx]["TKButton"].bind("<MouseWheel>", self.source_faces_mouse_wheel)
+        
+        # Track in group if provided
+        if group is not None:
+            group["FaceIndices"].append(face_idx)
+        
+        # Return a thumbnail for group button (create small version)
+        small_crop = cv2.resize(crop, (28, 28))
+        return ImageTk.PhotoImage(image=Image.fromarray(small_crop))
+    
+    def _position_group_faces(self, group, start_y):
+        """Position all faces in a group on the canvas"""
+        canvas_y = start_y
+        col = 0
+        row = 0
+        
+        for face_idx in group["FaceIndices"]:
+            x_pos = 10 + (col * 100)
+            y_pos = canvas_y + (row * 100)
+            
+            self.source_faces_canvas.create_window(x_pos, y_pos, window=self.source_faces[face_idx]["TKButton"], anchor='nw')
+            
+            col += 1
+            if col >= 2:
+                col = 0
+                row += 1
+        
+        # Return the next y position after all faces
+        return canvas_y + ((row + 1) * 100) if group["FaceIndices"] else canvas_y
 
     def find_faces(self):
         try:
-            img = torch.from_numpy(self.video_image).to('cuda')
+            img = torch.from_numpy(self.video_image).to(self.models.detection_device_str)
             img = img.permute(2,0,1)
             kpss = self.models.run_detect(img, max_num=50)
 
+            # Move img to main device for recognition (GPU for AMD hybrid mode)
+            if self.models.detection_device_str != self.models.device_str:
+                img = img.to(self.models.device_str)
 
             ret = []
             for face_kps in kpss:
@@ -1195,7 +1346,7 @@ class GUI(tk.Tk):
     def populate_target_videos(self):
         # Recursively read all media files from directory
         directory =  self.json_dict["source videos"]
-        filenames = [os.path.join(dirpath,f) for (dirpath, dirnames, filenames) in os.walk(directory) for f in filenames]
+        filenames = sorted([os.path.join(dirpath,f) for (dirpath, dirnames, filenames) in os.walk(directory) for f in filenames])
 
         videos = []
         images = []
@@ -1897,3 +2048,93 @@ class GUI(tk.Tk):
         print(np.dot(vector1, vector2))
 
         return cos_dist
+    
+    def toggle_folder_group(self, event, group_idx):
+        """Toggle expand/collapse for a folder group or select all faces in group"""
+        # Check if this is a Ctrl+click for group selection
+        try:
+            if event.state & 0x4 != 0:  # Ctrl+click
+                self.select_face_group(group_idx)
+                return
+        except:
+            pass
+        
+        # Otherwise, toggle expand/collapse
+        group = self.face_groups[group_idx]
+        group["Expanded"] = not group["Expanded"]
+        
+        # Update button text
+        btn_text = f"{'▼' if group['Expanded'] else '▶'} {group['FolderName']} ({group['FaceCount']})"
+        group["TKButton"].config(text=btn_text)
+        
+        # Rebuild the entire canvas to reflect expand/collapse
+        self._rebuild_faces_canvas()
+
+    def select_face_group(self, group_idx):
+        """Select all faces in a folder group"""
+        group = self.face_groups[group_idx]
+        
+        # Toggle group state
+        new_state = not group["ButtonState"]
+        group["ButtonState"] = new_state
+        
+        # Update group button style
+        if new_state:
+            group["TKButton"].config(style.media_button_on_3)
+        else:
+            group["TKButton"].config(style.media_button_off_3)
+        
+        # Update all face button states in this group
+        for face_idx in group["FaceIndices"]:
+            self.source_faces[face_idx]["ButtonState"] = new_state
+            if new_state:
+                self.source_faces[face_idx]["TKButton"].config(style.media_button_on_3)
+            else:
+                self.source_faces[face_idx]["TKButton"].config(style.media_button_off_3)
+        
+        # Update group button highlighting across all groups
+        self._update_group_highlights()
+        
+        # Trigger face averaging with existing logic
+        self.select_input_faces('auto', 0)
+
+    def _rebuild_faces_canvas(self):
+        """Rebuild the entire faces canvas after expand/collapse"""
+        # Clear canvas
+        self.source_faces_canvas.delete("all")
+        
+        # Reposition all groups and their faces
+        canvas_y = 0
+        
+        for group in self.face_groups:
+            # Position group button
+            self.source_faces_canvas.create_window(0, canvas_y, window=group["TKButton"], anchor='nw')
+            canvas_y += 30
+            
+            # Position faces if expanded
+            if group["Expanded"]:
+                canvas_y = self._position_group_faces(group, canvas_y)
+        
+        self.source_faces_canvas.configure(scrollregion=self.source_faces_canvas.bbox("all"))
+        self.static_widget['input_faces_scrollbar'].resize_scrollbar(None)
+
+    def _update_group_highlights(self):
+        """Update group button highlights based on face selection states"""
+        for group in self.face_groups:
+            if not group["FaceIndices"]:
+                continue
+            
+            selected_count = sum(
+                1 for idx in group["FaceIndices"] 
+                if self.source_faces[idx]["ButtonState"]
+            )
+            
+            # Update group button visual state
+            if selected_count == len(group["FaceIndices"]):
+                # All faces selected
+                group["ButtonState"] = True
+                group["TKButton"].config(style.media_button_on_3)
+            else:
+                # No faces or partial faces selected
+                group["ButtonState"] = False
+                group["TKButton"].config(style.media_button_off_3)
