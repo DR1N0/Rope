@@ -355,27 +355,27 @@ class Button():
         # Add Icon
         if self.default_data[self.name+'Display'] == 'both':   
             img = Image.open(self.default_data[self.name+'IconOn'])
-            resized_image= img.resize((20,20), Image.ANTIALIAS)
+            resized_image= img.resize((20,20), Image.LANCZOS)
             self.icon_on = ImageTk.PhotoImage(resized_image)
             img = Image.open(self.default_data[self.name+'IconOff'])
-            resized_image= img.resize((20,20), Image.ANTIALIAS)
+            resized_image= img.resize((20,20), Image.LANCZOS)
             self.icon_off = ImageTk.PhotoImage(resized_image)
             img = Image.open(self.default_data[self.name+'IconHover'])
-            resized_image= img.resize((20,20), Image.ANTIALIAS)
+            resized_image= img.resize((20,20), Image.LANCZOS)
             self.icon_hover = ImageTk.PhotoImage(resized_image)
             
             text = ' '+self.default_data[self.name+'Text']
             
         elif self.default_data[self.name+'Display'] == 'icon':   
             img = Image.open(self.default_data[self.name+'IconOn'])
-            resized_image= img.resize((20,20), Image.ANTIALIAS)
+            resized_image= img.resize((20,20), Image.LANCZOS)
             self.icon_on = ImageTk.PhotoImage(resized_image)
             img = Image.open(self.default_data[self.name+'IconOff'])
-            resized_image= img.resize((20,20), Image.ANTIALIAS)
+            resized_image= img.resize((20,20), Image.LANCZOS)
             self.icon_off = ImageTk.PhotoImage(resized_image)
             img = Image.open(self.default_data[self.name+'IconHover'])
-            resized_image= img.resize((20,20), Image.ANTIALIAS)
-            self.icon_hover = ImageTk.PhotoImage(resized_image)            
+            resized_image= img.resize((20,20), Image.LANCZOS)
+            self.icon_hover = ImageTk.PhotoImage(resized_image)
             
             text = ''
             
@@ -629,12 +629,12 @@ class Switch2():
         self.display_text = display_text
         # Load Icons
         self.img = Image.open(style.icon['IconOff'])
-        self.img = self.img.resize((40,40), Image.ANTIALIAS)
+        self.img = self.img.resize((40,40), Image.LANCZOS)
         self.icon_off = ImageTk.PhotoImage(self.img)    
         
         self.img = Image.open(style.icon['IconOn'])
-        self.img = self.img.resize((40,40), Image.ANTIALIAS)
-        self.icon_on = ImageTk.PhotoImage(self.img) 
+        self.img = self.img.resize((40,40), Image.LANCZOS)
+        self.icon_on = ImageTk.PhotoImage(self.img)
 
         # Frame to hold everything
         self.switch_frame = tk.Frame(self.parent, self.frame_style, width=self.width, height=self.height)
@@ -1243,5 +1243,4 @@ class VRAM_Indicator():
         pass
  
     def unhide(self):
-        pass  
-        
+        pass
