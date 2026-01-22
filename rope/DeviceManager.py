@@ -136,9 +136,7 @@ class DeviceManager:
         """
         Get device string and type for face detection.
         Returns (device_str, device_type) tuple.
-        Uses GPU for both NVIDIA CUDA and AMD ROCm/MIGraphX.
         """
-        # Use GPU for both NVIDIA and AMD - no CPU workaround needed
         return (self.get_device_string(), self.device_type)
     
     def get_device_string(self) -> str:

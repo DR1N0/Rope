@@ -881,7 +881,16 @@ class VideoManager():
             swap = torch.add(swap, img_crop)
             swap = swap.type(torch.uint8)
             swap = swap.permute(2,0,1)
-            img[0:3, top:bottom, left:right] = swap  
+            
+            # MIGraphX fix: Move tensors to CPU for slice assignment to avoid partial write bug
+            # This has minimal performance impact as the frame is converted to CPU/numpy anyway
+            if 'MIGraphXExecutionProvider' in self.models.providers:
+                img_cpu = img.cpu()
+                swap_cpu = swap.cpu()
+                img_cpu[0:3, top:bottom, left:right] = swap_cpu
+                img = img_cpu.to(self.models.device_str)
+            else:
+                img[0:3, top:bottom, left:right] = swap
 
         else:
             # Invert swap mask
